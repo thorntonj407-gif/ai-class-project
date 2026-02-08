@@ -1,8 +1,7 @@
 """Main analyzer that orchestrates scoring and AI-powered signal analysis."""
 
+import os
 from typing import Optional
-from langchain_openai import ChatOpenAI
-from langchain.prompts import PromptTemplate
 from models import FinancialMetrics, CapitalRaisePrediction
 from scorer import CapitalRaiseScorer
 
@@ -19,10 +18,13 @@ class CapitalRaiseAnalyzer:
             temperature: LLM temperature for reproducibility
         """
         self.scorer = CapitalRaiseScorer()
-        self.llm = ChatOpenAI(
-            model=model_name,
-            temperature=temperature,
-        )
+        self.llm = None
+        if os.environ.get("OPENAI_API_KEY"):
+            from langchain_openai import ChatOpenAI
+            self.llm = ChatOpenAI(
+                model=model_name,
+                temperature=temperature,
+            )
 
     def analyze(
         self,
@@ -76,9 +78,10 @@ class CapitalRaiseAnalyzer:
         if news:
             combined_text += f"RECENT NEWS:\n{news}\n\n"
 
-        if not combined_text:
+        if not combined_text or self.llm is None:
             return []
 
+        from langchain_core.prompts import PromptTemplate
         prompt_template = PromptTemplate(
             input_variables=["company_name", "text"],
             template="""Analyze the following earnings call transcript and/or news for {company_name}

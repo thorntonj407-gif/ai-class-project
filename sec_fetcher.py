@@ -1,0 +1,307 @@
+"""Fetch company financial metrics from SEC EDGAR and Yahoo Finance."""
+
+import requests
+import time
+from typing import Optional
+from models import FinancialMetrics
+
+# SEC EDGAR requires a User-Agent header with contact info
+SEC_HEADERS = {
+    "User-Agent": "CapitalRaiseDetector/1.0 (student@university.edu)",
+    "Accept-Encoding": "gzip, deflate",
+}
+
+# Cache the ticker-to-CIK mapping so we only download it once
+_TICKER_CIK_CACHE: Optional[dict] = None
+
+
+def _get_ticker_cik_map() -> dict:
+    """Download and cache the SEC ticker-to-CIK mapping (with exchange info)."""
+    global _TICKER_CIK_CACHE
+    if _TICKER_CIK_CACHE is not None:
+        return _TICKER_CIK_CACHE
+
+    url = "https://www.sec.gov/files/company_tickers_exchange.json"
+    resp = requests.get(url, headers=SEC_HEADERS)
+    resp.raise_for_status()
+    data = resp.json()
+
+    # Fields: [cik, name, ticker, exchange]
+    fields = data.get("fields", [])
+    rows = data.get("data", [])
+
+    # Build ticker -> {cik, name, exchange} mapping
+    mapping = {}
+    for row in rows:
+        cik = row[0]
+        name = row[1]
+        ticker = str(row[2]).upper()
+        exchange = row[3] if len(row) > 3 else ""
+        mapping[ticker] = {
+            "cik": cik,
+            "name": name,
+            "exchange": exchange or "",
+        }
+
+    _TICKER_CIK_CACHE = mapping
+    return mapping
+
+
+def ticker_to_cik(ticker: str) -> tuple[int, str]:
+    """
+    Look up CIK number and company name from ticker symbol.
+
+    Returns:
+        (cik_number, company_name)
+
+    Raises:
+        ValueError if ticker not found
+    """
+    mapping = _get_ticker_cik_map()
+    ticker = ticker.upper().strip()
+    if ticker not in mapping:
+        raise ValueError(
+            f"Ticker '{ticker}' not found in SEC EDGAR. "
+            f"Make sure it's a valid US public company ticker."
+        )
+    entry = mapping[ticker]
+    return entry["cik"], entry["name"]
+
+
+def fetch_company_facts(cik: int) -> dict:
+    """
+    Fetch all XBRL facts for a company from SEC EDGAR.
+
+    Args:
+        cik: SEC Central Index Key
+
+    Returns:
+        Raw JSON dict of all company facts
+    """
+    cik_padded = str(cik).zfill(10)
+    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik_padded}.json"
+    resp = requests.get(url, headers=SEC_HEADERS)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _extract_latest_value(facts: dict, tag: str, prefer_10k: bool = False) -> Optional[float]:
+    """
+    Extract the most recent value for an XBRL tag from company facts.
+
+    Args:
+        facts: Raw company facts JSON
+        tag: US-GAAP XBRL tag name
+        prefer_10k: If True, prefer annual (10-K) filings over quarterly
+
+    Returns:
+        Most recent value, or None if not found
+    """
+    us_gaap = facts.get("facts", {}).get("us-gaap", {})
+    tag_data = us_gaap.get(tag, {})
+    units = tag_data.get("units", {})
+
+    # Most financial values are in USD
+    values = units.get("USD", [])
+    if not values:
+        # Some values might be in USD/shares or pure numbers
+        values = units.get("USD/shares", [])
+    if not values:
+        values = units.get("pure", [])
+    if not values:
+        return None
+
+    # Filter by form type if preferred
+    if prefer_10k:
+        annual = [v for v in values if v.get("form") in ("10-K", "10-K/A")]
+        if annual:
+            values = annual
+
+    # Sort by end date descending to get most recent
+    values_sorted = sorted(values, key=lambda v: v.get("end", ""), reverse=True)
+
+    if values_sorted:
+        return float(values_sorted[0]["val"])
+    return None
+
+
+def _extract_prior_year_value(facts: dict, tag: str) -> Optional[float]:
+    """
+    Extract the value from the prior year's annual filing.
+
+    Returns the second most recent 10-K value.
+    """
+    us_gaap = facts.get("facts", {}).get("us-gaap", {})
+    tag_data = us_gaap.get(tag, {})
+    units = tag_data.get("units", {})
+
+    values = units.get("USD", [])
+    if not values:
+        values = units.get("pure", [])
+    if not values:
+        return None
+
+    # Get 10-K filings only
+    annual = [v for v in values if v.get("form") in ("10-K", "10-K/A")]
+    # Sort by end date descending
+    annual_sorted = sorted(annual, key=lambda v: v.get("end", ""), reverse=True)
+
+    # Return the second most recent (prior year)
+    if len(annual_sorted) >= 2:
+        return float(annual_sorted[1]["val"])
+    return None
+
+
+def fetch_stock_data(ticker: str) -> dict:
+    """
+    Fetch current stock price and 52-week high from Yahoo Finance.
+
+    Returns:
+        Dict with 'price' and 'fifty_two_week_high'
+    """
+    import yfinance as yf
+
+    stock = yf.Ticker(ticker)
+    info = stock.info
+
+    return {
+        "price": info.get("currentPrice") or info.get("regularMarketPrice", 0.0),
+        "fifty_two_week_high": info.get("fiftyTwoWeekHigh", 0.0),
+    }
+
+
+def fetch_metrics(ticker: str) -> FinancialMetrics:
+    """
+    Fetch all financial metrics for a company from SEC EDGAR and Yahoo Finance.
+
+    Args:
+        ticker: Stock ticker symbol (e.g., "AAPL")
+
+    Returns:
+        Populated FinancialMetrics object
+    """
+    print(f"Looking up {ticker}...")
+    cik, company_name = ticker_to_cik(ticker)
+    print(f"  Found: {company_name} (CIK: {cik})")
+
+    print(f"  Fetching SEC filings...")
+    facts = fetch_company_facts(cik)
+    time.sleep(0.15)  # Respect rate limits
+
+    # Extract financial data from XBRL tags
+    # Try multiple tag variants since companies use different ones
+    cash = (
+        _extract_latest_value(facts, "CashAndCashEquivalentsAtCarryingValue")
+        or _extract_latest_value(facts, "CashCashEquivalentsAndShortTermInvestments")
+        or _extract_latest_value(facts, "Cash")
+        or 0.0
+    )
+
+    current_assets = _extract_latest_value(facts, "AssetsCurrent") or 0.0
+    current_liabilities = _extract_latest_value(facts, "LiabilitiesCurrent") or 0.0
+
+    inventory = _extract_latest_value(facts, "InventoryNet") or 0.0
+    quick_assets = current_assets - inventory
+
+    accounts_payable = _extract_latest_value(facts, "AccountsPayableCurrent") or 0.0
+
+    # Debt
+    long_term_debt = _extract_latest_value(facts, "LongTermDebt") or 0.0
+    short_term_debt = (
+        _extract_latest_value(facts, "ShortTermBorrowings")
+        or _extract_latest_value(facts, "DebtCurrent")
+        or 0.0
+    )
+    total_debt = long_term_debt + short_term_debt
+
+    debt_due_12mo = (
+        _extract_latest_value(facts, "LongTermDebtCurrent")
+        or _extract_latest_value(facts, "CurrentPortionOfLongTermDebt")
+        or short_term_debt
+    )
+
+    # Approximate debt_due_6_18mo
+    debt_due_6_18mo = max(0.0, total_debt - long_term_debt - debt_due_12mo) if total_debt > 0 else 0.0
+
+    # Revenue
+    revenue = (
+        _extract_latest_value(facts, "Revenues")
+        or _extract_latest_value(facts, "RevenueFromContractWithCustomerExcludingAssessedTax")
+        or _extract_latest_value(facts, "SalesRevenueNet")
+        or 0.0
+    )
+
+    revenue_prior = (
+        _extract_prior_year_value(facts, "Revenues")
+        or _extract_prior_year_value(facts, "RevenueFromContractWithCustomerExcludingAssessedTax")
+        or _extract_prior_year_value(facts, "SalesRevenueNet")
+        or revenue  # Fallback to current if no prior data
+    )
+
+    # Operating cash flow
+    ocf = (
+        _extract_latest_value(facts, "NetCashProvidedByUsedInOperatingActivities")
+        or 0.0
+    )
+
+    # Gross profit and margin
+    gross_profit = _extract_latest_value(facts, "GrossProfit") or 0.0
+    gross_margin = (gross_profit / revenue) if revenue > 0 else 0.0
+
+    prior_gross_profit = _extract_prior_year_value(facts, "GrossProfit") or 0.0
+    prior_gross_margin = (prior_gross_profit / revenue_prior) if revenue_prior > 0 else gross_margin
+
+    # Capex
+    capex = (
+        _extract_latest_value(facts, "PaymentsToAcquirePropertyPlantAndEquipment")
+        or 0.0
+    )
+
+    # Monthly burn rate (derived from OCF)
+    monthly_burn_rate = max(0.0, -ocf / 12) if ocf < 0 else 0.0
+
+    # Stock data from Yahoo Finance
+    print(f"  Fetching stock data...")
+    try:
+        stock_data = fetch_stock_data(ticker)
+        stock_price = stock_data["price"]
+        stock_price_52w_high = stock_data["fifty_two_week_high"]
+    except Exception as e:
+        print(f"  Warning: Could not fetch stock data: {e}")
+        stock_price = 0.0
+        stock_price_52w_high = 0.0
+
+    # Ensure no zeros that would cause division errors in scorer
+    if current_liabilities == 0:
+        current_liabilities = 1.0
+    if revenue_prior == 0:
+        revenue_prior = 1.0
+
+    metrics = FinancialMetrics(
+        ticker=ticker.upper(),
+        company_name=company_name,
+        cash_and_equivalents=cash,
+        monthly_burn_rate=monthly_burn_rate,
+        current_assets=current_assets,
+        current_liabilities=current_liabilities,
+        quick_assets=quick_assets,
+        accounts_payable=accounts_payable,
+        total_debt=total_debt,
+        debt_due_12mo=debt_due_12mo,
+        debt_due_6_18mo=debt_due_6_18mo,
+        revenue_trailing_12m=revenue,
+        revenue_prior_year=revenue_prior,
+        operating_cash_flow_trailing_12m=ocf,
+        gross_margin=gross_margin,
+        prior_gross_margin=prior_gross_margin,
+        capex_annual=capex,
+        stock_price=stock_price,
+        stock_price_52w_high=stock_price_52w_high,
+        insider_selling_activity="normal",
+        auditor_going_concern=False,
+        credit_rating=None,
+        credit_rating_outlook=None,
+    )
+
+    print(f"  Done! Metrics loaded for {company_name}")
+    return metrics

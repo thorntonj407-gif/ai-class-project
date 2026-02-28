@@ -24,15 +24,23 @@ FRAME_TAGS = {
 }
 
 
-def fetch_frame(tag: str, year: int, quarter: Optional[int] = None, instant: bool = False) -> dict:
+def fetch_frame(
+    tag: str,
+    year: int,
+    quarter: Optional[int] = None,
+    instant: bool = False,
+    taxonomy: str = "us-gaap",
+) -> dict:
     """
     Fetch one XBRL metric for ALL companies from the Frames API.
 
     Args:
-        tag: US-GAAP XBRL tag
+        tag: XBRL tag name
         year: Calendar year (e.g., 2024)
         quarter: Quarter number (1-4), or None for annual
         instant: If True, fetch instantaneous (balance sheet) data
+        taxonomy: XBRL taxonomy namespace (default: "us-gaap"; use "dei" for
+                  Document and Entity Information tags like EntityPublicFloat)
 
     Returns:
         Dict mapping CIK -> value
@@ -42,7 +50,7 @@ def fetch_frame(tag: str, year: int, quarter: Optional[int] = None, instant: boo
     else:
         period = f"CY{year}" if not instant else f"CY{year}I"
 
-    url = f"https://data.sec.gov/api/xbrl/frames/us-gaap/{tag}/USD/{period}.json"
+    url = f"https://data.sec.gov/api/xbrl/frames/{taxonomy}/{tag}/USD/{period}.json"
     resp = requests.get(url, headers=SEC_HEADERS)
 
     if resp.status_code != 200:
@@ -82,9 +90,9 @@ def _fetch_all_frames(year: int) -> dict:
     step = [0]
     quarters = [1, 2, 3, 4]
 
-    def _fetch(tag, yr, qtr, instant):
+    def _fetch(tag, yr, qtr, instant, taxonomy="us-gaap"):
         step[0] += 1
-        result = fetch_frame(tag, yr, qtr, instant=instant)
+        result = fetch_frame(tag, yr, qtr, instant=instant, taxonomy=taxonomy)
         time.sleep(0.12)
         return result
 
@@ -138,6 +146,13 @@ def _fetch_all_frames(year: int) -> dict:
     capex_frames = [_fetch("PaymentsToAcquirePropertyPlantAndEquipment", year, q, False) for q in quarters]
     frames["capex"] = _merge_frames(*capex_frames)
 
+    # EntityPublicFloat (DEI tag) — aggregate market value of shares held by
+    # non-affiliates, reported on the 10-K cover page. Used as an EDGAR-native
+    # market cap proxy so we don't rely on yfinance for size filtering.
+    print(f"  Fetching public float data (Q1-Q4)...")
+    pf_frames = [_fetch("EntityPublicFloat", year, q, True, taxonomy="dei") for q in quarters]
+    frames["public_float"] = _merge_frames(*pf_frames)
+
     print(f"  Total API calls: {step[0]}")
     return frames
 
@@ -169,7 +184,7 @@ def _fetch_prior_year_frames(year: int) -> dict:
 def screen_all_companies(
     year: Optional[int] = None,
     exchanges: Optional[list[str]] = None,
-    min_market_cap: float = 0,
+    min_market_cap: float = 1_000_000_000,
 ) -> list:
     """
     Screen US public companies for capital raise risk.
@@ -179,7 +194,7 @@ def screen_all_companies(
               Data is fetched across all 4 quarters for maximum coverage.
         exchanges: Filter to these exchanges (e.g., ["NYSE", "Nasdaq"]).
                    Default: NYSE and Nasdaq only.
-        min_market_cap: Minimum market cap in USD (default: 0, no filter).
+        min_market_cap: Minimum market cap in USD (default: $1B).
                         Applied after scoring to minimize API calls.
 
     Returns:
@@ -211,12 +226,23 @@ def screen_all_companies(
     # Normalize exchange filter to lowercase for comparison
     exchange_filter = [e.lower() for e in exchanges] if exchanges else []
 
+    # SPAC name patterns — SPACs almost always contain these phrases
+    _SPAC_PATTERNS = (
+        "acquisition corp",
+        "acquisition co",
+        "blank check",
+        "special purpose acquisition",
+    )
+
     cik_to_ticker = {}
     for ticker, info in ticker_map.items():
         if exchange_filter:
             company_exchange = info.get("exchange", "").lower()
             if company_exchange not in exchange_filter:
                 continue
+        name_lower = info["name"].lower()
+        if any(p in name_lower for p in _SPAC_PATTERNS):
+            continue
         cik_to_ticker[info["cik"]] = {"ticker": ticker, "name": info["name"]}
 
     print(f"  {len(cik_to_ticker)} companies on {exchange_label}")
@@ -247,6 +273,18 @@ def screen_all_companies(
             long_term_debt = frames.get("long_term_debt", {}).get(cik, 0.0)
             debt_current = frames.get("debt_current", {}).get(cik, 0.0)
             revenue = frames.get("revenue", {}).get(cik, 0.0)
+
+            # Size pre-filter using EDGAR data only — no external API calls.
+            # Primary: EntityPublicFloat (public float from 10-K cover page).
+            # Fallback: revenue proxy when float data is unavailable.
+            public_float = frames.get("public_float", {}).get(cik, 0.0)
+            if public_float > 0:
+                if public_float < min_market_cap:
+                    continue  # EDGAR directly confirms company is too small
+            else:
+                # No float data filed — use stricter revenue floor as proxy
+                if revenue < min_market_cap * 0.10:
+                    continue
             ocf = frames.get("ocf", {}).get(cik, 0.0)
             gross_profit = frames.get("gross_profit", {}).get(cik, 0.0)
             capex = frames.get("capex", {}).get(cik, 0.0)
@@ -299,25 +337,6 @@ def screen_all_companies(
 
     # Sort by score descending
     results.sort(key=lambda x: x[2].likelihood_score, reverse=True)
-
-    # Apply market cap filter using yfinance (only on high-risk results)
-    if min_market_cap > 0 and results:
-        print(f"Step 4: Filtering by market cap (checking {len(results)} companies)...")
-        import yfinance as yf
-
-        filtered = []
-        for ticker, name, pred in results:
-            try:
-                info = yf.Ticker(ticker).info
-                mcap = info.get("marketCap", 0) or 0
-                if mcap >= min_market_cap:
-                    filtered.append((ticker, name, pred))
-            except Exception:
-                continue
-            time.sleep(0.05)
-
-        print(f"  {len(filtered)} companies above ${min_market_cap/1e6:.0f}M market cap")
-        results = filtered
 
     print(f"\nDone! Screened {len(ciks_with_data)} companies.")
     print(f"  High-risk companies found: {len(results)}")

@@ -126,23 +126,27 @@ class CapitalRaiseAnalyzer:
         return signals
 
     def batch_analyze(
-        self, companies: list[FinancialMetrics]
-    ) -> list[CapitalRaisePrediction]:
-        """
-        Analyze multiple companies.
+    self, companies: list[FinancialMetrics]
+) -> list[CapitalRaisePrediction]:
+    """
+    Analyze multiple companies.
 
-        Args:
-            companies: List of FinancialMetrics objects
+    Args:
+        companies: List of FinancialMetrics objects
 
-        Returns:
-            List of CapitalRaisePrediction objects
-        """
-        results = []
-        for company in companies:
+    Returns:
+        List of CapitalRaisePrediction objects
+    """
+    results = []
+    for company in companies:
+        try:
             result = self.analyze(company)
             results.append(result)
-        return results
-
+        except Exception as e:
+            print(f"Error analyzing {company.ticker} ({company.company_name}): {e}")
+            continue
+    return results
+    
     def get_alerts(
         self, predictions: list[CapitalRaisePrediction]
     ) -> list[CapitalRaisePrediction]:

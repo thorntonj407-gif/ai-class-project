@@ -376,7 +376,11 @@ def fetch_metrics(ticker: str) -> FinancialMetrics:
     )
 
     # Approximate debt_due_6_18mo
-    debt_due_6_18mo = max(0.0, total_debt - long_term_debt - debt_due_12mo) if total_debt > 0 else 0.0
+    # Try to get the exact amount of long-term debt maturing in year 2 (i.e. the year after next)
+# from the company's SEC filing. If not available, fall back to estimating it from total debt.
+debt_due_6_18mo = (_extract_latest_value(facts, "LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo")
+    or max(0.0, total_debt - long_term_debt - debt_due_12mo) if total_debt > 0 else 0.0
+)
 
     # Revenue
     revenue = (

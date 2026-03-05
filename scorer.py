@@ -286,7 +286,23 @@ class CapitalRaiseScorer:
 
     def _calculate_confidence(self, metrics: FinancialMetrics) -> float:
         """Calculate confidence in prediction based on data quality."""
-        confidence = self.CONFIDENCE_BASE
-        # Would reduce confidence if data is stale or incomplete
-        # For now, assume all required data is present
-        return confidence
+        confidence = self.CONFIDENCE_BASE  # Start at 85
+
+        # Reduce confidence for missing market & behavioral data
+        if metrics.stock_price == 0.0 or metrics.stock_price_52w_high == 0.0:
+            confidence -= 10  # Can't score stock decline without price data
+
+        if metrics.insider_selling_activity == "normal":
+            confidence -= 5  # "normal" is the default when data isn't available
+
+        if metrics.credit_rating is None:
+            confidence -= 5  # Missing credit rating weakens debt maturity signal
+
+        # Reduce confidence for missing operational data
+        if metrics.revenue_trailing_12m == 0.0:
+            confidence -= 10  # No revenue data severely limits scoring
+
+        if metrics.operating_cash_flow_trailing_12m == 0.0:
+            confidence -= 5  # OCF is key to burn rate and operational scoring
+
+        return max(confidence, 30.0)  # Floor at 30% — never report near-zero confidence

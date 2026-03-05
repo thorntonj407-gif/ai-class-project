@@ -163,9 +163,6 @@ def _fetch_all_frames(year: int) -> dict:
     print(f"  Total API calls: {step[0]}")
     return frames
 
-    print(f"  Total API calls: {step[0]}")
-    return frames
-
 
 def _fetch_prior_year_frames(year: int) -> dict:
     """Fetch prior year revenue and gross profit across all quarters."""

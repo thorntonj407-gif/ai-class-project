@@ -253,28 +253,26 @@ When connecting to real data, integrate with:
 
 ## Scoring Examples
 
-### Example 1: BURN (Score: 66.5 - HIGH RISK)
-
+### Example 1: BURN (Score: 67.0 - HIGH RISK)
 ```
-Cash Runway: 25.0/40     (5.0 months runway)
-Liquidity Stress: 14.0/20 (Current ratio 1.33, but weak quick ratio)
-Debt Maturity: 12.0/15   (Near-term debt obligations)
-Operational: 10.0/15     (Negative OCF, revenue flat)
-Market: 5.5/10           (Stock down 62%, elevated insider selling)
+Cash Runway: 25.0/25     (5.0 months runway)
+Liquidity Stress: 0.0/10  (Current ratio 1.33, adequate)
+Debt Maturity: 15.0/25   (Near-term debt obligations, negative outlook)
+Operational: 11.0/20     (Negative OCF, capex exceeds FCF)
+Market: 16.0/20          (Stock down 62%, elevated insider selling)
 ─────────────────────────
-Total: 66.5/100 ⚠️  ABOVE THRESHOLD
+Total: 67.0/100 ⚠️  ABOVE THRESHOLD
 ```
 
-### Example 2: STRONG (Score: 5.0 - LOW RISK)
-
+### Example 2: STRONG (Score: 0.0 - LOW RISK)
 ```
-Cash Runway: 0.0/40      (Strong cash generation)
-Liquidity Stress: 0.0/20 (Excellent ratios)
-Debt Maturity: 0.0/15    (Manageable debt schedule)
-Operational: 0.0/15      (Strong revenue and margins)
-Market: 5.0/10           (Stock up, normal insider activity)
+Cash Runway: 0.0/25      (Strong cash generation)
+Liquidity Stress: 0.0/10 (Excellent ratios)
+Debt Maturity: 0.0/25    (Manageable debt schedule)
+Operational: 0.0/20      (Strong revenue and margins)
+Market: 0.0/20           (Stock near 52w high, normal insider activity)
 ─────────────────────────
-Total: 5.0/100 ✓ Below threshold
+Total: 0.0/100 ✓ Below threshold
 ```
 
 ## Implementation Approach

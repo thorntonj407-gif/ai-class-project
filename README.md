@@ -12,11 +12,11 @@ Total Score = Sum of 5 Signals (max 100):
 
 | Signal | Max Points | Description |
 |--------|-----------|-------------|
-| **Cash Runway** | 40 | Months of cash remaining at burn rate |
-| **Liquidity Stress** | 20 | Current ratio, quick ratio, working capital |
-| **Debt Maturity** | 15 | Near-term debt obligations & covenant risk |
-| **Operational Red Flags** | 15 | Revenue trends, margins, operating cash flow |
-| **Market & Behavioral** | 10 | Stock price, insider activity |
+| **Cash Runway** | 25 | Months of cash remaining at burn rate |
+| **Liquidity Stress** | 10 | Current ratio, quick ratio, working capital |
+| **Debt Maturity** | 25 | Near-term debt obligations & covenant risk |
+| **Operational Red Flags** | 20 | Revenue trends, margins, operating cash flow |
+| **Market & Behavioral** | 20 | Stock price, insider activity |
 
 ### Threshold
 
@@ -40,15 +40,15 @@ Total Score = Sum of 5 Signals (max 100):
 
 **Calculation**: Cash & equivalents ÷ Monthly operating cash outflow
 
-**Scoring**:
-- < 6 months runway: 40 points
-- 6-12 months: 25 points
-- 12-18 months: 10 points
+### 1. Cash Runway (0-25 points)
+- < 6 months runway: 25 points
+- 6-12 months: 15 points
+- 12-18 months: 5 points
 - > 18 months: 0 points
 
 **Why it matters**: Companies with limited cash runway are forced to raise capital to survive.
 
-### 2. Liquidity Stress (0-20 points)
+### 2. Liquidity Stress (0-10 points)
 
 **Measures**: Ability to meet short-term obligations
 
@@ -68,7 +68,7 @@ Total Score = Sum of 5 Signals (max 100):
 
 **Why it matters**: Weak liquidity forces immediate capital needs.
 
-### 3. Debt Maturity Profile (0-15 points)
+### 3. Debt Maturity Profile (0-25 points)
 
 **Measures**: Debt obligations due in 6-18 months
 
@@ -87,7 +87,7 @@ Total Score = Sum of 5 Signals (max 100):
 
 **Why it matters**: Large debt maturities create refinancing pressure.
 
-### 4. Operational Red Flags (0-15 points)
+### 4. Operational Red Flags (0-20 points)
 
 **Measures**: Business health and cash generation
 
@@ -109,7 +109,7 @@ Total Score = Sum of 5 Signals (max 100):
 
 **Why it matters**: Deteriorating operations reduce internal cash generation and increase capital needs.
 
-### 5. Market & Behavioral Signals (0-10 points)
+### 5. Market & Behavioral Signals (0-20 points)
 
 **Measures**: Market perception and insider confidence
 

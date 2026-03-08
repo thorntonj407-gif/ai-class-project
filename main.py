@@ -56,13 +56,23 @@ def main():
     if args.use_examples or args.ticker == "all":
         companies = EXAMPLE_COMPANIES
     else:
-        # Find example company by ticker
+        # First check example companies
         matching = [c for c in EXAMPLE_COMPANIES if c.ticker == args.ticker]
-        if not matching:
-            print(f"Error: No example company found with ticker {args.ticker}")
-            print(f"Available: {', '.join(c.ticker for c in EXAMPLE_COMPANIES)}")
-            return
-        companies = matching
+        if matching:
+            companies = matching
+        else:
+            # Fall back to fetching real data from SEC EDGAR
+            try:
+                from sec_fetcher import fetch_metrics
+                print(f"Ticker '{args.ticker}' not in examples, fetching from SEC EDGAR...")
+                metrics = fetch_metrics(args.ticker)
+                companies = [metrics]
+            except ValueError as e:
+                print(f"Error: {e}")
+                return
+            except Exception as e:
+                print(f"Error fetching data for {args.ticker}: {e}")
+                return
 
     # Analyze companies
     predictions = []
@@ -163,3 +173,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

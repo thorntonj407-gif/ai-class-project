@@ -325,6 +325,130 @@ def fetch_credit_rating(ticker: str, cik: int) -> tuple[Optional[str], Optional[
     return None, None
 
 
+def fetch_insider_activity(cik: int, lookback_days: int = 180) -> str:
+    """
+    Classify insider selling activity from SEC Form 4 filings.
+
+    Fetches all Form 4s filed in the past `lookback_days` days and counts
+    open-market sale transactions (transaction code 'S'). Classifies as:
+      - "high"     : 5+ sale transactions
+      - "elevated" : 2-4 sale transactions
+      - "normal"   : 0-1 sale transactions
+
+    Args:
+        cik: SEC Central Index Key
+        lookback_days: How far back to look for Form 4 filings
+
+    Returns:
+        "high" | "elevated" | "normal"
+    """
+    cik_padded = str(cik).zfill(10)
+    since = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
+    try:
+        # Fetch submission history to find recent Form 4 filings
+        sub_url = f"https://data.sec.gov/submissions/CIK{cik_padded}.json"
+        resp = requests.get(sub_url, headers=SEC_HEADERS, timeout=15)
+        resp.raise_for_status()
+        sub_data = resp.json()
+    except Exception:
+        return "normal"
+
+    recent = sub_data.get("filings", {}).get("recent", {})
+    forms = recent.get("form", [])
+    accessions = recent.get("accessionNumber", [])
+    filed_dates = recent.get("filingDate", [])
+    primary_docs = recent.get("primaryDocument", [])
+
+    # Collect Form 4 accession numbers filed within lookback window
+    form4_filings = []
+    for i, form in enumerate(forms):
+        if form == "4" and filed_dates[i] >= since:
+            form4_filings.append((accessions[i], primary_docs[i]))
+        if len(form4_filings) >= 20:  # Cap at 20 to limit API calls
+            break
+
+    if not form4_filings:
+        return "normal"
+
+    sale_count = 0
+    for acc_no, primary_doc in form4_filings:
+        try:
+            acc_clean = acc_no.replace("-", "")
+            doc_url = (
+                f"https://www.sec.gov/Archives/edgar/data/{cik}"
+                f"/{acc_clean}/{primary_doc}"
+            )
+            time.sleep(0.12)
+            doc_resp = requests.get(doc_url, headers=SEC_HEADERS, timeout=15)
+            if doc_resp.status_code != 200:
+                continue
+
+            text = doc_resp.text
+
+            # Form 4 XML: transactionCode 'S' = open-market sale
+            # Also catch HTML-rendered Form 4s
+            sales_in_filing = len(re.findall(
+                r'<transactionCode>\s*S\s*</transactionCode>'
+                r'|transactionCode[^>]*>\s*S\s*<',
+                text,
+                re.IGNORECASE,
+            ))
+            # Fallback: plain-text / HTML table rendering
+            if sales_in_filing == 0:
+                sales_in_filing = len(re.findall(
+                    r'(?:^|\b)S(?:\s+|\t+)(?:\d|open\s+market)',
+                    text,
+                    re.IGNORECASE | re.MULTILINE,
+                ))
+            sale_count += min(sales_in_filing, 3)  # Cap contribution per filing
+        except Exception:
+            continue
+
+    if sale_count >= 5:
+        return "high"
+    elif sale_count >= 2:
+        return "elevated"
+    else:
+        return "normal"
+
+
+# Going concern keyword patterns from auditing standards (AS 2415 / AU-C 570)
+_GOING_CONCERN_PATTERNS = [
+    r'substantial\s+doubt\s+about\s+(?:the\s+)?(?:company\'?s?\s+)?ability\s+to\s+continue',
+    r'going[\s\-]concern',
+    r'ability\s+to\s+continue\s+as\s+a\s+going\s+concern',
+    r'raise[sd]?\s+substantial\s+doubt',
+    r'conditions?\s+(?:and\s+events?\s+)?that\s+raise\s+substantial\s+doubt',
+    r'recoverability\s+of\s+(?:the\s+)?assets?\s+(?:is|are|may\s+be)\s+uncertain',
+]
+
+_GOING_CONCERN_RE = re.compile(
+    "|".join(_GOING_CONCERN_PATTERNS),
+    re.IGNORECASE,
+)
+
+
+def fetch_going_concern(cik: int) -> bool:
+    """
+    Detect auditor going concern warnings from the most recent 10-K filing.
+
+    Searches the first 400 KB of the 10-K for language consistent with a
+    going concern qualification per AS 2415 / AU-C 570 auditing standards.
+
+    Args:
+        cik: SEC Central Index Key
+
+    Returns:
+        True if a going concern warning is detected, False otherwise
+    """
+    text = _fetch_recent_10k_text(cik)
+    if not text:
+        return False
+    clean = _strip_html(text)
+    return bool(_GOING_CONCERN_RE.search(clean))
+
+
 def fetch_metrics(ticker: str) -> FinancialMetrics:
     """
     Fetch all financial metrics for a company from SEC EDGAR and Yahoo Finance.
@@ -375,8 +499,11 @@ def fetch_metrics(ticker: str) -> FinancialMetrics:
         or short_term_debt
     )
 
-    # Approximate debt_due_6_18mo
-    debt_due_6_18mo = max(0.0, total_debt - long_term_debt - debt_due_12mo) if total_debt > 0 else 0.0
+    # Approximate debt_due_6_18mo — try XBRL tag first, fall back to estimation
+    debt_due_6_18mo = (
+        _extract_latest_value(facts, "LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo")
+        or (max(0.0, total_debt - long_term_debt - debt_due_12mo) if total_debt > 0 else 0.0)
+    )
 
     # Revenue
     revenue = (
@@ -422,6 +549,20 @@ def fetch_metrics(ticker: str) -> FinancialMetrics:
     except Exception:
         credit_rating, credit_rating_outlook = None, None
 
+    # Insider selling activity from Form 4 filings
+    print(f"  Fetching insider activity (Form 4)...")
+    try:
+        insider_selling_activity = fetch_insider_activity(cik)
+    except Exception:
+        insider_selling_activity = "normal"
+
+    # Going concern warning from 10-K auditor's report
+    print(f"  Checking for going concern warnings...")
+    try:
+        auditor_going_concern = fetch_going_concern(cik)
+    except Exception:
+        auditor_going_concern = False
+
     # Stock data from Yahoo Finance
     print(f"  Fetching stock data...")
     try:
@@ -459,8 +600,8 @@ def fetch_metrics(ticker: str) -> FinancialMetrics:
         capex_annual=capex,
         stock_price=stock_price,
         stock_price_52w_high=stock_price_52w_high,
-        insider_selling_activity="normal",
-        auditor_going_concern=False,
+        insider_selling_activity=insider_selling_activity,
+        auditor_going_concern=auditor_going_concern,
         credit_rating=credit_rating,
         credit_rating_outlook=credit_rating_outlook,
     )

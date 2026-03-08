@@ -1,6 +1,7 @@
 """Main analyzer that orchestrates scoring and AI-powered signal analysis."""
 
 import os
+import re
 from typing import Optional
 from models import FinancialMetrics, CapitalRaisePrediction
 from scorer import CapitalRaiseScorer
@@ -66,11 +67,15 @@ class CapitalRaiseAnalyzer:
         """
         Use LLM to analyze earnings calls and news for capital raise signals.
 
+        Prompts the LLM for structured JSON output — a list of up to 3 concise
+        signal strings — so each signal can be cleanly parsed and displayed
+        without truncation or mangling.
+
         Looks for:
         - Management language ("exploring strategic options", "financing")
-        - Strategic shifts
-        - Financing mentions
+        - Strategic shifts and financing discussions
         - Acquisition/divestiture activity
+        - Going concern language or funding urgency
         """
         combined_text = ""
         if transcript:
@@ -81,49 +86,65 @@ class CapitalRaiseAnalyzer:
         if not combined_text or self.llm is None:
             return []
 
+        import json
         from langchain_core.prompts import PromptTemplate
+
         prompt_template = PromptTemplate(
             input_variables=["company_name", "text"],
-            template="""Analyze the following earnings call transcript and/or news for {company_name}
-            and identify any signals that suggest the company may be considering a capital raise
-            (IPO, secondary offering, private fundraise, etc.).
+            template="""Analyze the following text for {company_name} and identify signals \
+suggesting the company may be considering a capital raise \
+(secondary offering, private fundraise, debt refinancing, etc.).
 
-            Look for:
-            - Explicit mentions of "financing", "capital raise", "equity raise", "exploring strategic options"
-            - References to growth investments needing capital
-            - Management commentary on funding needs or strategic changes
-            - Mergers, acquisitions, or divestitures
-            - New product launches requiring investment
+Look for:
+- Explicit mentions of financing, capital raise, equity raise, or strategic options
+- Management commentary on funding needs or cash runway
+- Mergers, acquisitions, or divestitures requiring capital
+- Going concern language or urgency around liquidity
 
-            Text to analyze:
-            {text}
+Text to analyze:
+{text}
 
-            Provide 2-3 specific signals/quotes that suggest capital raise likelihood, or "No clear signals" if none found.
-            Be concise and factual.""",
+Respond ONLY with a JSON array of up to 3 short signal strings (each under 120 characters).
+If no signals are found, respond with an empty array [].
+Do not include any explanation, preamble, or markdown — just the raw JSON array.
+
+Example of valid output:
+["CFO mentioned exploring financing alternatives on the Q3 call", \
+"News reports secondary offering being discussed with underwriters"]""",
         )
 
         chain = prompt_template | self.llm
-        response = chain.invoke(
-            {
-                "company_name": metrics.company_name,
-                "text": combined_text[:3000],  # Limit to 3000 chars
-            }
-        )
+        try:
+            response = chain.invoke(
+                {
+                    "company_name": metrics.company_name,
+                    "text": combined_text[:3000],
+                }
+            )
 
-        # Extract signals from LLM response
-        response_text = response.content.lower()
-        signals = []
+            # Strip markdown code fences if the LLM adds them anyway
+            raw = response.content.strip()
+            if raw.startswith("```"):
+                raw = re.sub(r"^```[a-z]*\n?", "", raw)
+                raw = re.sub(r"\n?```$", "", raw.strip())
 
-        if "no clear signals" in response_text:
-            return signals
+            parsed = json.loads(raw)
 
-        # Parse response - take the main text as market signal
-        if response_text:
-            # Clean up and add as market signal
-            signal = f"Market signal: {response.content[:100]}..."
-            signals.append(signal)
+            if not isinstance(parsed, list):
+                return []
 
-        return signals
+            # Validate each item is a non-empty string and prefix for display
+            signals = []
+            for item in parsed:
+                if isinstance(item, str) and item.strip():
+                    signals.append(f"Market signal: {item.strip()}")
+
+            return signals[:3]  # Enforce cap of 3 signals
+
+        except (json.JSONDecodeError, Exception):
+            # If parsing fails entirely, fall back to returning nothing
+            # rather than surfacing a garbled partial string
+            return []
 
     def batch_analyze(
         self, companies: list[FinancialMetrics]
@@ -139,8 +160,12 @@ class CapitalRaiseAnalyzer:
         """
         results = []
         for company in companies:
-            result = self.analyze(company)
-            results.append(result)
+            try:
+                result = self.analyze(company)
+                results.append(result)
+            except Exception as e:
+                print(f"Error analyzing {company.ticker} ({company.company_name}): {e}")
+                continue
         return results
 
     def get_alerts(

@@ -153,6 +153,13 @@ def _fetch_all_frames(year: int) -> dict:
     pf_frames = [_fetch("EntityPublicFloat", year, q, True, taxonomy="dei") for q in quarters]
     frames["public_float"] = _merge_frames(*pf_frames)
 
+    # Try to get the exact amount of long-term debt maturing in year 2 (i.e. the year after next)
+    # from the company's SEC filing. If not available, fall back to estimating it from total debt.
+    debt_6_18mo_frames = []
+    for q in quarters:
+        debt_6_18mo_frames.append(_fetch("LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo", year, q, True))
+    frames["debt_due_6_18mo_xbrl"] = _merge_frames(*debt_6_18mo_frames)
+
     print(f"  Total API calls: {step[0]}")
     return frames
 
@@ -272,6 +279,7 @@ def screen_all_companies(
             accounts_payable = frames.get("accounts_payable", {}).get(cik, 0.0)
             long_term_debt = frames.get("long_term_debt", {}).get(cik, 0.0)
             debt_current = frames.get("debt_current", {}).get(cik, 0.0)
+            debt_due_6_18mo_xbrl = frames.get("debt_due_6_18mo_xbrl", {}).get(cik, None)
             revenue = frames.get("revenue", {}).get(cik, 0.0)
 
             # Size pre-filter using EDGAR data only — no external API calls.
@@ -308,7 +316,9 @@ def screen_all_companies(
                 accounts_payable=accounts_payable,
                 total_debt=total_debt,
                 debt_due_12mo=debt_current,
-                debt_due_6_18mo=max(0.0, total_debt - long_term_debt - debt_current),
+                # Try to get the exact amount of long-term debt maturing in year 2 (i.e. the year after next)
+                # from the company's SEC filing. If not available, fall back to estimating it from total debt.
+                debt_due_6_18mo=debt_due_6_18mo_xbrl or max(0.0, total_debt - long_term_debt - debt_current),
                 revenue_trailing_12m=revenue,
                 revenue_prior_year=revenue_prior,
                 operating_cash_flow_trailing_12m=ocf,

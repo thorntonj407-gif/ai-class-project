@@ -3,10 +3,141 @@
 import requests
 import time
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 from models import FinancialMetrics
 from scorer import CapitalRaiseScorer
 from sec_fetcher import _get_ticker_cik_map, SEC_HEADERS
+
+# SIC code to GICS sector mapping (2-digit division)
+# GICS Sectors: Energy, Materials, Industrials, Consumer Discretionary, Consumer Staples,
+# Health Care, Financials, Information Technology, Communication Services, Utilities, Real Estate
+_SIC_TO_SECTOR = {
+    # 01-09: Agriculture, forestry, fishing
+    "01": "Materials", "02": "Materials", "07": "Materials", "08": "Materials", "09": "Materials",
+    # 10-14: Mining
+    "10": "Energy", "11": "Energy", "12": "Energy", "13": "Energy", "14": "Energy",
+    # 15-17: Construction
+    "15": "Industrials", "16": "Industrials", "17": "Industrials",
+    # 20-39: Manufacturing
+    "20": "Materials", "21": "Materials", "22": "Materials", "23": "Materials", "24": "Materials",
+    "25": "Materials", "26": "Materials", "27": "Materials", "28": "Materials", "29": "Energy",
+    "30": "Materials", "31": "Materials", "32": "Materials", "33": "Materials", "34": "Industrials",
+    "35": "Information Technology",  # Industrial machinery, computers, electronics
+    "36": "Information Technology",  # Electronic/electrical equipment
+    "37": "Industrials",  # Transportation equipment
+    "38": "Industrials",  # Instruments
+    "39": "Industrials",  # Misc manufacturing
+    # 40-49: Transportation, utilities, waste
+    "40": "Industrials", "41": "Industrials", "42": "Industrials", "43": "Industrials",
+    "44": "Utilities", "45": "Industrials", "46": "Industrials", "47": "Industrials", "48": "Utilities", "49": "Utilities",
+    # 50-59: Wholesale & retail trade
+    "50": "Consumer Discretionary", "51": "Consumer Discretionary", "52": "Consumer Discretionary", "53": "Consumer Discretionary", "54": "Consumer Discretionary",
+    "55": "Consumer Discretionary", "56": "Consumer Discretionary", "57": "Consumer Discretionary", "58": "Consumer Discretionary", "59": "Consumer Discretionary",
+    # 60-69: Finance, insurance, real estate
+    "60": "Financials", "61": "Financials", "62": "Financials", "63": "Financials", "64": "Financials", "65": "Financials",
+    "66": "Financials", "67": "Real Estate", "68": "Real Estate", "69": "Financials",
+    # 70-89: Services
+    "70": "Information Technology",  # Business/computer services
+    "71": "Consumer Discretionary",  # Hotels, entertainment, recreation
+    "72": "Consumer Discretionary",  # Personal services
+    "73": "Information Technology",  # Business/computer services
+    "74": "Information Technology",  # Data processing, software
+    "75": "Industrials", "76": "Consumer Discretionary", "77": "Consumer Discretionary", "78": "Consumer Discretionary", "79": "Consumer Discretionary",
+    "80": "Health Care", "81": "Health Care", "82": "Health Care", "83": "Health Care",
+    "84": "Consumer Staples", "85": "Information Technology", "86": "Financials", "87": "Information Technology", "88": "Information Technology", "89": "Information Technology",
+    # 90-99: Government
+    "91": "Consumer Staples", "92": "Consumer Staples", "93": "Consumer Staples", "94": "Consumer Staples",
+    "95": "Consumer Staples", "96": "Consumer Staples", "97": "Consumer Staples", "98": "Consumer Staples", "99": "Consumer Staples",
+}
+
+_SECTOR_CACHE = {}
+_SIC_CACHE = {}
+
+
+def _fetch_sic_for_cik(cik: int) -> Optional[str]:
+    """
+    Fetch SIC code from SEC EDGAR CIK lookup page.
+
+    Args:
+        cik: Central Index Key number
+
+    Returns:
+        SIC code (4 digits), or None if not available
+    """
+    if cik in _SIC_CACHE:
+        return _SIC_CACHE[cik]
+
+    try:
+        import re
+        # Fetch the company's EDGAR CIK page which shows SIC code
+        cik_str = str(cik).zfill(10)
+        url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik_str}&type=&dateb=&owner=exclude&count=40"
+
+        resp = requests.get(url, headers=SEC_HEADERS, timeout=5)
+
+        if resp.status_code == 200:
+            # Look for "SIC=" in the HTML
+            match = re.search(r'SIC=(\d{4})', resp.text)
+            if match:
+                sic = match.group(1)
+                _SIC_CACHE[cik] = sic
+                return sic
+    except Exception:
+        pass
+
+    _SIC_CACHE[cik] = None
+    return None
+
+
+def _get_sector_from_sic(sic_code: Optional[str]) -> str:
+    """Map SIC code to sector."""
+    if not sic_code:
+        return "Unknown"
+
+    # Get first 2 digits
+    code_prefix = sic_code[:2] if len(sic_code) >= 2 else sic_code
+    return _SIC_TO_SECTOR.get(code_prefix, "Unknown")
+
+
+def _fetch_sector_for_ticker(ticker: str, sic_code: Optional[str] = None) -> str:
+    """
+    Fetch sector using SIC code from SEC data or yfinance as fallback.
+
+    Args:
+        ticker: Stock ticker symbol
+        sic_code: Optional SIC code from SEC EDGAR
+
+    Returns:
+        Sector name, or "Unknown" if unavailable
+    """
+    ticker_upper = ticker.upper()
+
+    # Check cache first
+    if ticker_upper in _SECTOR_CACHE:
+        return _SECTOR_CACHE[ticker_upper]
+
+    # Try SIC code mapping first (from SEC)
+    if sic_code:
+        sector = _get_sector_from_sic(sic_code)
+        if sector != "Unknown":
+            _SECTOR_CACHE[ticker_upper] = sector
+            return sector
+
+    # Try yfinance as fallback
+    try:
+        import yfinance as yf
+        stock = yf.Ticker(ticker_upper)
+        sector = stock.info.get("sector", "Unknown")
+        result = sector if sector and sector != "None" else "Unknown"
+        _SECTOR_CACHE[ticker_upper] = result
+        time.sleep(0.05)
+        return result
+    except Exception:
+        pass
+
+    # Final fallback
+    _SECTOR_CACHE[ticker_upper] = "Unknown"
+    return "Unknown"
 
 # XBRL tags to fetch for screening
 FRAME_TAGS = {
@@ -190,7 +321,7 @@ def _fetch_prior_year_frames(year: int) -> dict:
 
 def screen_all_companies(
     year: Optional[int] = None,
-    exchanges: Optional[list[str]] = None,
+    exchanges: Optional[List[str]] = None,
     min_market_cap: float = 1_000_000_000,
 ) -> list:
     """
@@ -250,7 +381,9 @@ def screen_all_companies(
         name_lower = info["name"].lower()
         if any(p in name_lower for p in _SPAC_PATTERNS):
             continue
-        cik_to_ticker[info["cik"]] = {"ticker": ticker, "name": info["name"]}
+        cik = info["cik"]
+        # Don't fetch SIC codes yet - only fetch for high-risk companies later
+        cik_to_ticker[cik] = {"ticker": ticker, "name": info["name"], "cik": cik}
 
     print(f"  {len(cik_to_ticker)} companies on {exchange_label}")
 
@@ -305,6 +438,9 @@ def screen_all_companies(
             gross_margin = (gross_profit / revenue) if revenue > 0 else 0.0
             prior_gross_margin = (gross_profit_prior / revenue_prior) if revenue_prior > 0 else gross_margin
 
+            # Use public_float as market cap (EDGAR native, no external API calls)
+            market_cap = public_float or (revenue * 1.5 if revenue > 0 else 0.0)  # fallback estimate
+
             metrics = FinancialMetrics(
                 ticker=company_info["ticker"],
                 company_name=company_info["name"],
@@ -331,10 +467,18 @@ def screen_all_companies(
                 auditor_going_concern=False,
                 credit_rating=None,
                 credit_rating_outlook=None,
+                sector="Unknown",  # Will be populated for high-risk results
+                market_cap=market_cap,
             )
 
             prediction = scorer.score(metrics)
             if prediction.above_threshold:
+                # Fetch sector for high-risk results (fetch SIC on-demand to speed up screening)
+                sic = _fetch_sic_for_cik(company_info["cik"])
+                sector = _fetch_sector_for_ticker(company_info["ticker"], sic)
+                if sector != "Unknown":
+                    print(f"    {company_info['ticker']}: {sector}")
+                prediction.sector = sector
                 results.append((
                     company_info["ticker"],
                     company_info["name"],
@@ -354,3 +498,34 @@ def screen_all_companies(
         print(f"  Skipped {errors} companies due to data issues")
 
     return results
+
+
+def format_results_table(results: List) -> str:
+    """
+    Format screening results as a table with sector and market cap columns.
+
+    Args:
+        results: List of (ticker, company_name, CapitalRaisePrediction) tuples
+
+    Returns:
+        Formatted table string
+    """
+    if not results:
+        return "No high-risk companies found."
+
+    # Header
+    header = f"{'Ticker':<8} {'Company':<35} {'Sector':<20} {'Market Cap':<15} {'Score':<8} {'Risk':<10}"
+    lines = [header, "-" * 96]
+
+    for ticker, company_name, prediction in results:
+        market_cap_str = (
+            f"${prediction.market_cap/1e9:.1f}B"
+            if prediction.market_cap > 0
+            else "Unknown"
+        )
+        lines.append(
+            f"{ticker:<8} {company_name:<35} {prediction.sector:<20} {market_cap_str:<15} "
+            f"{prediction.likelihood_score:<8.1f} {prediction.risk_level.upper():<10}"
+        )
+
+    return "\n".join(lines)

@@ -1,7 +1,7 @@
 """Data models for Capital Raise Detector using Pydantic."""
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -39,6 +39,11 @@ class FinancialMetrics(BaseModel):
     credit_rating: Optional[str] = Field(default=None, description="Credit rating (e.g., BBB, BB)")
     credit_rating_outlook: Optional[str] = Field(default=None, description="Outlook: stable/negative/positive")
 
+    # Company classification
+    sector: str = Field(default="Unknown", description="Industry sector")
+    industry: Optional[str] = Field(default="Unknown", description="Sub-industry")
+    market_cap: float = Field(default=0.0, description="Market capitalization in USD")
+
     # Metadata
     last_updated: datetime = Field(default_factory=datetime.now)
 
@@ -64,20 +69,26 @@ class CapitalRaisePrediction(BaseModel):
     risk_level: str = Field(..., description="low/medium/high/critical")
 
     # Key drivers
-    key_drivers: list[str] = Field(default_factory=list, description="Top risk factors")
+    key_drivers: List[str] = Field(default_factory=list, description="Top risk factors")
 
     # Confidence
     confidence: float = Field(..., description="Confidence in prediction (0-100)")
+
+    # Company classification for output
+    sector: str = Field(default="Unknown", description="Industry sector")
+    market_cap: float = Field(default=0.0, description="Market capitalization in USD")
 
     # Timestamp
     timestamp: datetime = Field(default_factory=datetime.now)
 
     def __str__(self) -> str:
         """Pretty print the prediction."""
+        market_cap_str = f"${self.market_cap/1e9:.1f}B" if self.market_cap > 0 else "Unknown"
         return f"""
 Capital Raise Detector Report
 {'='*50}
 Company: {self.company_name} ({self.ticker})
+Sector: {self.sector} | Market Cap: {market_cap_str}
 Likelihood Score: {self.likelihood_score:.1f}/100
 Risk Level: {self.risk_level.upper()}
 Status: {"⚠️  ABOVE THRESHOLD" if self.above_threshold else "✓ Below threshold"}

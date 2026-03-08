@@ -29,6 +29,8 @@ STRONG_COMPANY = FinancialMetrics(
     auditor_going_concern=False,
     credit_rating="BBB+",
     credit_rating_outlook="stable",
+    sector="Information Technology",
+    market_cap=15_000_000_000,  # $15B market cap
 )
 
 # Example 2: Company with cash runway concerns
@@ -56,6 +58,8 @@ CASH_RUNWAY_RISK = FinancialMetrics(
     auditor_going_concern=False,
     credit_rating="B",
     credit_rating_outlook="negative",
+    sector="Energy",
+    market_cap=1_800_000_000,  # $1.8B market cap
 )
 
 # Example 3: Company with operational and liquidity stress
@@ -83,6 +87,8 @@ OPERATIONAL_STRESS = FinancialMetrics(
     auditor_going_concern=True,  # Red flag!
     credit_rating="CCC",
     credit_rating_outlook="negative",
+    sector="Consumer Discretionary",
+    market_cap=2_500_000_000,  # $2.5B market cap
 )
 
 # Example 4: Growth-stage company needing capital
@@ -110,6 +116,8 @@ GROWTH_STAGE = FinancialMetrics(
     auditor_going_concern=False,
     credit_rating="BB+",
     credit_rating_outlook="positive",
+    sector="Information Technology",
+    market_cap=8_500_000_000,  # $8.5B market cap
 )
 
 # Example 5: Stable mature company
@@ -137,6 +145,8 @@ MATURE_STABLE = FinancialMetrics(
     auditor_going_concern=False,
     credit_rating="A-",
     credit_rating_outlook="stable",
+    sector="Financials",
+    market_cap=45_200_000_000,  # $45.2B market cap
 )
 
 

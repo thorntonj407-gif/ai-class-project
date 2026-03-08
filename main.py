@@ -100,16 +100,19 @@ def main():
         print("No companies above threshold.")
         return
 
-    # Summary table
+    # Summary table with rank column
     summary_data = [
         [
+            i + 1,  # Rank starting at 1
             p.ticker,
+            p.sector,
+            f"${p.market_cap/1e9:.1f}B" if p.market_cap > 0 else "Unknown",
             f"{p.likelihood_score:.1f}",
             p.risk_level.upper(),
             "⚠️ YES" if p.above_threshold else "✓ No",
             f"{p.confidence:.0f}%",
         ]
-        for p in predictions
+        for i, p in enumerate(predictions)
     ]
 
     print(
@@ -118,7 +121,7 @@ def main():
     print(
         tabulate(
             summary_data,
-            headers=["Ticker", "Score", "Risk", "Alert", "Confidence"],
+            headers=["Rank", "Ticker", "Sector", "Market Cap", "Score", "Risk", "Alert", "Confidence"],
             tablefmt="grid",
         )
     )
@@ -138,6 +141,8 @@ def main():
             {
                 "ticker": p.ticker,
                 "company_name": p.company_name,
+                "sector": p.sector,
+                "market_cap": p.market_cap,
                 "likelihood_score": p.likelihood_score,
                 "signal_scores": p.signal_scores.model_dump(),
                 "above_threshold": p.above_threshold,

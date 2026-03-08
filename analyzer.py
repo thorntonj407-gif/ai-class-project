@@ -2,7 +2,7 @@
 
 import os
 import re
-from typing import Optional
+from typing import List, Optional
 from models import FinancialMetrics, CapitalRaisePrediction
 from scorer import CapitalRaiseScorer
 
@@ -63,7 +63,7 @@ class CapitalRaiseAnalyzer:
         metrics: FinancialMetrics,
         transcript: Optional[str] = None,
         news: Optional[str] = None,
-    ) -> list[str]:
+    ) -> List[str]:
         """
         Use LLM to analyze earnings calls and news for capital raise signals.
 
@@ -147,8 +147,8 @@ Example of valid output:
             return []
 
     def batch_analyze(
-        self, companies: list[FinancialMetrics]
-    ) -> list[CapitalRaisePrediction]:
+        self, companies: List[FinancialMetrics]
+    ) -> List[CapitalRaisePrediction]:
         """
         Analyze multiple companies.
 
@@ -169,8 +169,8 @@ Example of valid output:
         return results
 
     def get_alerts(
-        self, predictions: list[CapitalRaisePrediction]
-    ) -> list[CapitalRaisePrediction]:
+        self, predictions: List[CapitalRaisePrediction]
+    ) -> List[CapitalRaisePrediction]:
         """
         Filter to companies above threshold that need monitoring.
 

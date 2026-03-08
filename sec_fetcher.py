@@ -5,7 +5,7 @@ import requests
 import time
 from collections import Counter
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import List, Optional, Tuple
 from models import FinancialMetrics
 
 # SEC EDGAR requires a User-Agent header with contact info
@@ -50,7 +50,7 @@ def _get_ticker_cik_map() -> dict:
     return mapping
 
 
-def ticker_to_cik(ticker: str) -> tuple[int, str]:
+def ticker_to_cik(ticker: str) -> Tuple[int, str]:
     """
     Look up CIK number and company name from ticker symbol.
 
@@ -157,10 +157,10 @@ def _extract_prior_year_value(facts: dict, tag: str) -> Optional[float]:
 
 def fetch_stock_data(ticker: str) -> dict:
     """
-    Fetch current stock price and 52-week high from Yahoo Finance.
+    Fetch stock price, 52-week high, sector, industry, and market cap from Yahoo Finance.
 
     Returns:
-        Dict with 'price' and 'fifty_two_week_high'
+        Dict with 'price', 'fifty_two_week_high', 'sector', 'industry', 'market_cap'
     """
     import yfinance as yf
 
@@ -170,6 +170,9 @@ def fetch_stock_data(ticker: str) -> dict:
     return {
         "price": info.get("currentPrice") or info.get("regularMarketPrice", 0.0),
         "fifty_two_week_high": info.get("fiftyTwoWeekHigh", 0.0),
+        "sector": info.get("sector", "Unknown"),
+        "industry": info.get("industry", "Unknown"),
+        "market_cap": info.get("marketCap", 0.0),
     }
 
 
@@ -208,7 +211,7 @@ def _strip_html(text: str) -> str:
     )
 
 
-def _parse_credit_info(text: str) -> tuple[Optional[str], Optional[str]]:
+def _parse_credit_info(text: str) -> Tuple[Optional[str], Optional[str]]:
     """Extract (credit_rating, outlook) from raw text or HTML."""
     clean = _strip_html(text)
 
@@ -275,7 +278,7 @@ def _fetch_recent_10k_text(cik: int) -> Optional[str]:
     return None
 
 
-def fetch_credit_rating(ticker: str, cik: int) -> tuple[Optional[str], Optional[str]]:
+def fetch_credit_rating(ticker: str, cik: int) -> Tuple[Optional[str], Optional[str]]:
     """
     Fetch credit rating and outlook from SEC EDGAR.
 
@@ -305,7 +308,7 @@ def fetch_credit_rating(ticker: str, cik: int) -> tuple[Optional[str], Optional[
         )
         if resp.status_code == 200:
             hits = resp.json().get("hits", {}).get("hits", [])
-            snippets: list[str] = []
+            snippets: List[str] = []
             for hit in hits[:5]:
                 for field_snippets in hit.get("highlight", {}).values():
                     if isinstance(field_snippets, list):
@@ -569,10 +572,16 @@ def fetch_metrics(ticker: str) -> FinancialMetrics:
         stock_data = fetch_stock_data(ticker)
         stock_price = stock_data["price"]
         stock_price_52w_high = stock_data["fifty_two_week_high"]
+        sector = stock_data["sector"]
+        industry = stock_data["industry"]
+        market_cap = stock_data["market_cap"]
     except Exception as e:
         print(f"  Warning: Could not fetch stock data: {e}")
         stock_price = 0.0
         stock_price_52w_high = 0.0
+        sector = "Unknown"
+        industry = "Unknown"
+        market_cap = 0.0
 
     # Ensure no zeros that would cause division errors in scorer
     if current_liabilities == 0:
@@ -604,6 +613,9 @@ def fetch_metrics(ticker: str) -> FinancialMetrics:
         auditor_going_concern=auditor_going_concern,
         credit_rating=credit_rating,
         credit_rating_outlook=credit_rating_outlook,
+        sector=sector,
+        industry=industry,
+        market_cap=market_cap,
     )
 
     print(f"  Done! Metrics loaded for {company_name}")

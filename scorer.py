@@ -1,5 +1,6 @@
 """Core scoring logic for Capital Raise Detector."""
 
+from typing import List
 from models import FinancialMetrics, SignalScores, CapitalRaisePrediction
 
 
@@ -59,6 +60,8 @@ class CapitalRaiseScorer:
             risk_level=risk_level,
             key_drivers=key_drivers,
             confidence=confidence,
+            sector=metrics.sector,
+            market_cap=metrics.market_cap,
         )
 
     def _score_cash_runway(self, metrics: FinancialMetrics) -> float:
@@ -243,7 +246,7 @@ class CapitalRaiseScorer:
 
     def _identify_key_drivers(
         self, metrics: FinancialMetrics, signal_scores: SignalScores
-    ) -> list[str]:
+    ) -> List[str]:
         """Identify top 3-5 risk drivers."""
         drivers = []
 

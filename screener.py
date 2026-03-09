@@ -323,6 +323,7 @@ def screen_all_companies(
     year: Optional[int] = None,
     exchanges: Optional[List[str]] = None,
     min_market_cap: float = 1_000_000_000,
+    min_score: float = 50,
 ) -> list:
     """
     Screen US public companies for capital raise risk.
@@ -334,10 +335,12 @@ def screen_all_companies(
                    Default: NYSE and Nasdaq only.
         min_market_cap: Minimum market cap in USD (default: $1B).
                         Applied after scoring to minimize API calls.
+        min_score: Minimum score threshold to include (default: 50).
+                   Set to 0 or lower to show all companies.
 
     Returns:
         List of (ticker, company_name, CapitalRaisePrediction) tuples,
-        sorted by likelihood score descending, filtered to high-risk only
+        sorted by likelihood score descending, filtered by min_score
     """
     if exchanges is None:
         exchanges = ["NYSE", "Nasdaq"]
@@ -441,6 +444,12 @@ def screen_all_companies(
             # Use public_float as market cap (EDGAR native, no external API calls)
             market_cap = public_float or (revenue * 1.5 if revenue > 0 else 0.0)  # fallback estimate
 
+            # Better estimate of debt_due_12mo:
+            # debt_current (from XBRL LongTermDebtCurrent) is the current portion of long-term debt
+            # This is the most reliable indicator of what's due in next 12 months
+            # Fallback: estimate as portion of total debt if debt_current is unavailable
+            debt_due_12mo_est = debt_current if debt_current > 0 else max(0.0, total_debt * 0.20)
+
             metrics = FinancialMetrics(
                 ticker=company_info["ticker"],
                 company_name=company_info["name"],
@@ -451,10 +460,10 @@ def screen_all_companies(
                 quick_assets=current_assets - inventory,
                 accounts_payable=accounts_payable,
                 total_debt=total_debt,
-                debt_due_12mo=debt_current,
+                debt_due_12mo=debt_due_12mo_est,
                 # Try to get the exact amount of long-term debt maturing in year 2 (i.e. the year after next)
                 # from the company's SEC filing. If not available, fall back to estimating it from total debt.
-                debt_due_6_18mo=debt_due_6_18mo_xbrl or max(0.0, total_debt - long_term_debt - debt_current),
+                debt_due_6_18mo=debt_due_6_18mo_xbrl or max(0.0, total_debt - long_term_debt - debt_due_12mo_est),
                 revenue_trailing_12m=revenue,
                 revenue_prior_year=revenue_prior,
                 operating_cash_flow_trailing_12m=ocf,
@@ -472,7 +481,7 @@ def screen_all_companies(
             )
 
             prediction = scorer.score(metrics)
-            if prediction.above_threshold:
+            if prediction.likelihood_score >= min_score:
                 # Fetch sector for high-risk results (fetch SIC on-demand to speed up screening)
                 sic = _fetch_sic_for_cik(company_info["cik"])
                 sector = _fetch_sector_for_ticker(company_info["ticker"], sic)

@@ -396,10 +396,12 @@ def screen_all_companies(
     ciks_with_data = ciks_with_any_data
     print(f"  {len(ciks_with_data)} with financial data")
 
-    # Score each company
-    print(f"Step 3: Scoring companies...")
+    # Score each company — two-pass approach:
+    # Pass 1 (EDGAR only): fast, no external API calls, builds candidate list
+    # Pass 2 (yfinance):   enriches candidates with real stock price + insider data
+    print(f"Step 3: Pass 1 — scoring on EDGAR signals (market/behavioral enriched in Pass 2)...")
     scorer = CapitalRaiseScorer()
-    results = []
+    pass1_candidates = []  # (metrics, company_info) tuples that clear the EDGAR floor
     errors = 0
 
     for cik in ciks_with_data:
@@ -450,6 +452,8 @@ def screen_all_companies(
             # Fallback: estimate as portion of total debt if debt_current is unavailable
             debt_due_12mo_est = debt_current if debt_current > 0 else max(0.0, total_debt * 0.20)
 
+            # Pass 1: score on EDGAR signals only — market/behavioral fields
+            # are left empty and enriched in Pass 2 for candidates only.
             metrics = FinancialMetrics(
                 ticker=company_info["ticker"],
                 company_name=company_info["name"],
@@ -470,33 +474,102 @@ def screen_all_companies(
                 gross_margin=gross_margin,
                 prior_gross_margin=prior_gross_margin,
                 capex_annual=capex,
-                stock_price=0.0,  # Skip stock data for bulk screening
+                stock_price=0.0,
                 stock_price_52w_high=0.0,
                 insider_selling_activity="normal",
                 auditor_going_concern=False,
                 credit_rating=None,
                 credit_rating_outlook=None,
-                sector="Unknown",  # Will be populated for high-risk results
+                sector="Unknown",
                 market_cap=market_cap,
             )
 
-            prediction = scorer.score(metrics)
-            if prediction.likelihood_score >= min_score:
-                # Fetch sector for high-risk results (fetch SIC on-demand to speed up screening)
-                sic = _fetch_sic_for_cik(company_info["cik"])
-                sector = _fetch_sector_for_ticker(company_info["ticker"], sic)
-                if sector != "Unknown":
-                    print(f"    {company_info['ticker']}: {sector}")
-                prediction.sector = sector
-                results.append((
-                    company_info["ticker"],
-                    company_info["name"],
-                    prediction,
-                ))
+            pass1_score = scorer.score(metrics)
+            # Only enrich companies that clear the EDGAR-signal floor.
+            # Max possible market/behavioral score is 20 pts, so a company
+            # scoring >= (min_score - 20) on EDGAR alone could still qualify
+            # after enrichment — catch them all.
+            if pass1_score.likelihood_score >= max(0, min_score - 20):
+                pass1_candidates.append((metrics, company_info))
 
         except Exception:
             errors += 1
             continue
+
+    print(f"  Pass 1 complete: {len(pass1_candidates)} candidates above EDGAR floor for enrichment")
+
+    # ---------------------------------------------------------------------------
+    # Pass 2: enrich candidates with real market/behavioral data from yfinance,
+    # then re-score with the full model (all 5 signals active).
+    # ---------------------------------------------------------------------------
+    print(f"Step 4: Pass 2 — enriching {len(pass1_candidates)} candidates with yfinance market data...")
+
+    try:
+        import yfinance as yf
+        yfinance_available = True
+    except ImportError:
+        print("  WARNING: yfinance not installed — market/behavioral signals will be skipped")
+        yfinance_available = False
+
+    results = []
+
+    for metrics, company_info in pass1_candidates:
+        ticker = company_info["ticker"]
+
+        stock_price = 0.0
+        stock_price_52w_high = 0.0
+        insider_activity = "normal"
+        real_market_cap = metrics.market_cap  # fall back to EDGAR public float
+
+        if yfinance_available:
+            try:
+                info = yf.Ticker(ticker).info
+
+                stock_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0.0
+                stock_price_52w_high = info.get("fiftyTwoWeekHigh") or 0.0
+
+                yf_market_cap = info.get("marketCap") or 0.0
+                if yf_market_cap > 0:
+                    real_market_cap = yf_market_cap
+
+                # Net insider transactions over the trailing 6 months.
+                # Negative net = more selling than buying → elevated/high activity.
+                insider_purchases = info.get("insiderPurchases6Month") or 0
+                insider_sales = info.get("insiderSales6Month") or 0
+                net_insider = insider_purchases - insider_sales
+                if net_insider < -5:
+                    insider_activity = "high"
+                elif net_insider < -2:
+                    insider_activity = "elevated"
+                else:
+                    insider_activity = "normal"
+
+                time.sleep(0.1)  # Be polite to the yfinance rate limiter
+
+            except Exception:
+                pass  # Keep defaults — don't drop the company just because yfinance failed
+
+        # Rebuild metrics with enriched market/behavioral fields
+        enriched_metrics = metrics.model_copy(update={
+            "stock_price": stock_price,
+            "stock_price_52w_high": stock_price_52w_high,
+            "insider_selling_activity": insider_activity,
+            "market_cap": real_market_cap,
+        })
+
+        # Re-score with the full 5-signal model
+        final_prediction = scorer.score(enriched_metrics)
+
+        if final_prediction.likelihood_score >= min_score:
+            sic = _fetch_sic_for_cik(company_info["cik"])
+            sector = _fetch_sector_for_ticker(ticker, sic)
+            final_prediction.sector = sector
+
+            market_signal_pts = final_prediction.signal_scores.market_behavioral_score
+            print(f"  {ticker}: {final_prediction.likelihood_score:.0f} "
+                  f"(market/behavioral signal: +{market_signal_pts:.0f} pts)")
+
+            results.append((ticker, company_info["name"], final_prediction))
 
     # Sort by score descending
     results.sort(key=lambda x: x[2].likelihood_score, reverse=True)
